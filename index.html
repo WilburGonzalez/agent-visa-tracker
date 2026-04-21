@@ -192,6 +192,7 @@ const STATUS_META={
   "Review — Ready to Send": {text:"#1a6b3c",border:"#1a6b3c44",bg:"#edf7f2"},
   "Sent to Lawyer":         {text:"#6b1a99",border:"#6b1a9944",bg:"#f5eeff"},
   "Filed & Pending":        {text:"#8b4500",border:"#8b450044",bg:"#fff5eb"},
+  "Archived":               {text:"#999",border:"#ccc",bg:"#f5f5f5"},
 };
 
 const AGENT_DEFAULTS={
@@ -414,13 +415,42 @@ function renderDashboard(){
     sb.appendChild(card);
   });
 
-  if(cases.length===0){
+  const activeCases = cases.filter(c => c.status !== "Archived");
+  const archivedCount = cases.filter(c => c.status === "Archived").length;
+
+  // Add show archived toggle
+  let toggleBar = document.getElementById("archiveToggle");
+  if(!toggleBar) {
+    toggleBar = document.createElement("div");
+    toggleBar.id = "archiveToggle";
+    toggleBar.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:12px";
+    document.getElementById("statusBar").after(toggleBar);
+  }
+  toggleBar.innerHTML = archivedCount > 0 ? `
+    <div style="font-size:11px;color:var(--gray)">${archivedCount} archived case${archivedCount>1?"s":""}</div>
+    <button onclick="toggleArchived()" id="archiveBtn" style="background:transparent;border:1px solid var(--border);color:var(--gray);font-family:'Barlow Condensed',sans-serif;font-size:10px;letter-spacing:.1em;cursor:pointer;padding:4px 10px;border-radius:3px">SHOW ARCHIVED</button>
+  ` : '';
+
+  if(activeCases.length===0 && archivedCount===0){
     document.getElementById("emptyState").style.display="block";
     document.getElementById("caseTable").style.display="none";
   } else {
     document.getElementById("emptyState").style.display="none";
     document.getElementById("caseTable").style.display="block";
+    renderRows(activeCases);
+  }
+}
+
+let showingArchived = false;
+function toggleArchived() {
+  showingArchived = !showingArchived;
+  const btn = document.getElementById("archiveBtn");
+  if(showingArchived) {
+    btn.textContent = "HIDE ARCHIVED";
     renderRows(cases);
+  } else {
+    btn.textContent = "SHOW ARCHIVED";
+    renderRows(cases.filter(c => c.status !== "Archived"));
   }
 }
 
@@ -708,6 +738,51 @@ function renderDetail(){
     });
     addBtn("✉  SEND FOLLOW-UP","btn-ghost",()=>draftFollowup(c));
     addBtn("↓  DOWNLOAD BIO + CHECKLIST","btn-outline",triggerDownloads);
+    
+    // Divider
+    const divider=document.createElement("div");
+    divider.style.cssText="height:1px;background:var(--border);margin:6px 0";
+    btns.appendChild(divider);
+    
+    // Archive button
+    const archiveBtn=document.createElement("button");
+    archiveBtn.className="btn btn-ghost";
+    archiveBtn.style.cssText="width:100%;text-align:left;font-size:10px;color:var(--gray)";
+    archiveBtn.textContent=c.status==="Archived"?"↩  UNARCHIVE CASE":"📁  ARCHIVE CASE";
+    archiveBtn.addEventListener("click",async()=>{
+      const newStatus=c.status==="Archived"?"Draft":"Archived";
+      const label=newStatus==="Archived"?"Archive":"Unarchive";
+      if(!confirm(`${label} this case for ${c.modelName}?`))return;
+      c.status=newStatus;
+      try{
+        await atUpdate("Models",c.id,{"Case Status":newStatus});
+        showToast(newStatus==="Archived"?"Case archived":"Case restored");
+        showDashboard();
+      }catch(e){showToast("Error: "+e.message);}
+    });
+    btns.appendChild(archiveBtn);
+    
+    // Delete button
+    const deleteBtn=document.createElement("button");
+    deleteBtn.className="btn btn-danger";
+    deleteBtn.style.cssText="width:100%;text-align:left;font-size:10px;margin-top:2px";
+    deleteBtn.textContent="🗑  DELETE CASE PERMANENTLY";
+    deleteBtn.addEventListener("click",async()=>{
+      if(!confirm(`PERMANENTLY DELETE the case for ${c.modelName}?\n\nThis cannot be undone. All documents will also be deleted.`))return;
+      if(!confirm("Are you absolutely sure? This is permanent."))return;
+      try{
+        // Delete linked documents first
+        if(c.loadedDocs&&c.loadedDocs.length){
+          await Promise.all(c.loadedDocs.map(d=>atDelete("Documents",d.id)));
+        }
+        await atDelete("Models",c.id);
+        cases=cases.filter(x=>x.id!==c.id);
+        showToast("Case deleted");
+        showDashboard();
+      }catch(e){showToast("Error deleting: "+e.message);}
+    });
+    btns.appendChild(deleteBtn);
+    
     card.appendChild(btns);
   }));
 
