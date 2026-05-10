@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Two Management — O-1B Visa Tracker</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -306,6 +307,56 @@ function downloadFile(b64,filename,mime){
   for(let i=0;i<b.length;i++)n[i]=b.charCodeAt(i);
   const blob=new Blob([n],{type:mime}),url=URL.createObjectURL(blob),a=document.createElement("a");
   a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);
+}
+function sanitizeFilename(s){return(s||"").replace(/[\\/:*?"<>|]+/g,"_").trim()||"file";}
+function docDownloadName(doc){
+  const f=doc.fields||{};
+  const att=(f["File Attachment"]||[])[0];
+  if(!att)return null;
+  const orig=att.filename||(f["Document Name"]||"document");
+  const type=f["Document Type"]||f["Document Name"]||"Document";
+  return sanitizeFilename(`${type} - ${orig}`);
+}
+async function downloadSingleAttachment(doc){
+  const f=doc.fields||{};
+  const att=(f["File Attachment"]||[])[0];
+  if(!att||!att.url){showToast("No file attached");return;}
+  try{
+    showToast("Downloading...");
+    const resp=await fetch(att.url);
+    const blob=await resp.blob();
+    const url=URL.createObjectURL(blob),a=document.createElement("a");
+    a.href=url;a.download=docDownloadName(doc);a.click();URL.revokeObjectURL(url);
+  }catch(e){showToast("Download failed: "+e.message);}
+}
+async function zipAndDownload(docs,zipName){
+  if(typeof JSZip==="undefined"){showToast("ZIP library not loaded");return;}
+  const withFiles=docs.filter(d=>((d.fields||{})["File Attachment"]||[]).length);
+  if(!withFiles.length){showToast("No files to download");return;}
+  showToast(`Zipping ${withFiles.length} file${withFiles.length>1?"s":""}...`);
+  const zip=new JSZip();
+  const used=new Set();
+  try{
+    await Promise.all(withFiles.map(async doc=>{
+      const att=doc.fields["File Attachment"][0];
+      const resp=await fetch(att.url);
+      const blob=await resp.blob();
+      let name=docDownloadName(doc);
+      if(used.has(name)){
+        const dot=name.lastIndexOf(".");
+        const base=dot>0?name.slice(0,dot):name;
+        const ext=dot>0?name.slice(dot):"";
+        let i=2;while(used.has(`${base} (${i})${ext}`))i++;
+        name=`${base} (${i})${ext}`;
+      }
+      used.add(name);
+      zip.file(name,blob);
+    }));
+    const out=await zip.generateAsync({type:"blob"});
+    const url=URL.createObjectURL(out),a=document.createElement("a");
+    a.href=url;a.download=sanitizeFilename(zipName);a.click();URL.revokeObjectURL(url);
+    showToast("✓ Download ready");
+  }catch(e){showToast("ZIP failed: "+e.message);}
 }
 function triggerDownloads(){
   showToast("Downloading files...");
@@ -679,11 +730,12 @@ function renderDetail(){
   docsCard.id="docsCard";
   docsCard.style.cssText="background:#fff;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden";
   docsCard.innerHTML=`
-    <div style="background:var(--navy);padding:12px 18px;display:flex;align-items:center;justify-content:space-between">
+    <div style="background:var(--navy);padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:10px">
       <div>
         <div style="font-size:9px;letter-spacing:.15em;color:rgba(255,255,255,.5);margin-bottom:2px">MODEL UPLOADS</div>
         <div style="font-size:11px;color:rgba(255,255,255,.7)">Documents submitted via portal</div>
       </div>
+      <div id="bulkDownloadBar" style="display:none"></div>
     </div>
     <div id="docsLoading" style="padding:20px;text-align:center;color:var(--gray);font-size:12px">Loading uploads...</div>
     <div id="docsList"></div>`;
@@ -738,7 +790,12 @@ function renderDetail(){
     });
     addBtn("✉  SEND FOLLOW-UP","btn-ghost",()=>draftFollowup(c));
     addBtn("↓  DOWNLOAD BIO + CHECKLIST","btn-outline",triggerDownloads);
-    
+    addBtn("↓  DOWNLOAD ALL APPROVED","btn-success",async function(){
+      const docs=(c.loadedDocs||[]).filter(d=>(d.fields||{})["Review Status"]==="Approved");
+      if(!docs.length){showToast("No approved documents yet");return;}
+      await zipAndDownload(docs,`${c.modelName} - O1 Approved Documents.zip`);
+    });
+
     // Divider
     const divider=document.createElement("div");
     divider.style.cssText="height:1px;background:var(--border);margin:6px 0";
@@ -802,11 +859,35 @@ function renderDetail(){
 function renderDocsSection(docs){
   const loading=document.getElementById("docsLoading");
   const list=document.getElementById("docsList");
+  const bar=document.getElementById("bulkDownloadBar");
   if(!loading||!list)return;
   loading.style.display="none";
+  list.innerHTML="";
+
+  const c=getCase(activeId);
+  const selected=new Set();
+
+  function refreshBulkBar(){
+    if(!bar)return;
+    const n=selected.size;
+    if(n===0){bar.style.display="none";bar.innerHTML="";return;}
+    bar.style.display="block";
+    bar.innerHTML="";
+    const btn=document.createElement("button");
+    btn.className="btn";
+    btn.style.cssText="background:#fff;color:var(--navy);font-size:10px;padding:7px 12px";
+    btn.textContent=`↓  DOWNLOAD SELECTED (${n})`;
+    btn.addEventListener("click",async()=>{
+      const picked=docs.filter(d=>selected.has(d.id));
+      const modelName=(c&&c.modelName)||"Model";
+      await zipAndDownload(picked,`${modelName} - O1 Documents.zip`);
+    });
+    bar.appendChild(btn);
+  }
 
   if(!docs||docs.length===0){
     list.innerHTML=`<div style="padding:20px;text-align:center;color:var(--gray);font-size:12px">No documents uploaded yet.<br><span style="font-size:11px;color:#bbb">Model uploads will appear here automatically.</span></div>`;
+    refreshBulkBar();
     return;
   }
 
@@ -819,15 +900,39 @@ function renderDocsSection(docs){
     const statusColors={"Received":"#1455d4","Reviewed":"#8b4500","Approved":"var(--success)","Rejected":"var(--danger)"};
     const statusColor=statusColors[f["Review Status"]]||"#888";
 
-    row.innerHTML=`
-      <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:500;color:#111;margin-bottom:2px">${f["Document Name"]||"Document"}</div>
-        <div style="font-size:10px;color:#aaa">${f["Upload Date"]?fmtDate(f["Upload Date"]):""}${f["Notes"]?" · "+f["Notes"]:""}</div>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
-        <span style="font-family:'Barlow Condensed',sans-serif;font-size:9px;font-weight:700;letter-spacing:.08em;color:${statusColor};padding:2px 7px;border:1px solid ${statusColor}33;border-radius:2px">${f["Review Status"]||"Received"}</span>
-        ${attachments.length?`<a href="${attachments[0].url}" target="_blank" style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;color:var(--blue);text-decoration:none;letter-spacing:.08em">VIEW ↗</a>`:""}
-      </div>`;
+    // Checkbox
+    const chk=document.createElement("div");
+    chk.className="check";
+    chk.title="Select for bulk download";
+    chk.addEventListener("click",()=>{
+      if(selected.has(doc.id)){
+        selected.delete(doc.id);
+        chk.className="check";
+        chk.innerHTML="";
+      }else{
+        selected.add(doc.id);
+        chk.className="check on";
+        chk.innerHTML='<svg width="10" height="8" viewBox="0 0 10 8"><path d="M1 4L3.5 6.5L9 1" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>';
+      }
+      refreshBulkBar();
+    });
+    row.appendChild(chk);
+
+    // Main info block
+    const info=document.createElement("div");
+    info.style.cssText="flex:1;min-width:0";
+    info.innerHTML=`
+      <div style="font-size:13px;font-weight:500;color:#111;margin-bottom:2px">${f["Document Name"]||"Document"}</div>
+      <div style="font-size:10px;color:#aaa">${f["Upload Date"]?fmtDate(f["Upload Date"]):""}${f["Notes"]?" · "+f["Notes"]:""}</div>`;
+    row.appendChild(info);
+
+    // Status pill + view link
+    const meta=document.createElement("div");
+    meta.style.cssText="display:flex;align-items:center;gap:8px;flex-shrink:0";
+    meta.innerHTML=`
+      <span style="font-family:'Barlow Condensed',sans-serif;font-size:9px;font-weight:700;letter-spacing:.08em;color:${statusColor};padding:2px 7px;border:1px solid ${statusColor}33;border-radius:2px">${f["Review Status"]||"Received"}</span>
+      ${attachments.length?`<a href="${attachments[0].url}" target="_blank" style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;color:var(--blue);text-decoration:none;letter-spacing:.08em">VIEW ↗</a>`:""}`;
+    row.appendChild(meta);
 
     // Review Status selector
     const sel=document.createElement("select");
@@ -841,6 +946,17 @@ function renderDocsSection(docs){
     });
     row.appendChild(sel);
 
+    // Per-row download button
+    if(attachments.length){
+      const dlBtn=document.createElement("button");
+      dlBtn.className="btn btn-outline";
+      dlBtn.style.cssText="font-size:11px;padding:4px 8px";
+      dlBtn.title="Download this file";
+      dlBtn.textContent="↓";
+      dlBtn.addEventListener("click",()=>downloadSingleAttachment(doc));
+      row.appendChild(dlBtn);
+    }
+
     // Delete button
     const delBtn=document.createElement("button");
     delBtn.className="btn btn-danger";delBtn.style.cssText="font-size:9px;padding:4px 8px";delBtn.textContent="✕";
@@ -848,12 +964,17 @@ function renderDocsSection(docs){
       if(!confirm("Remove this document?"))return;
       try{
         await atDelete("Documents",doc.id);
-        row.remove();showToast("Document removed");
+        selected.delete(doc.id);
+        row.remove();
+        refreshBulkBar();
+        showToast("Document removed");
       }catch(e){showToast("Error: "+e.message);}
     });
     row.appendChild(delBtn);
     list.appendChild(row);
   });
+
+  refreshBulkBar();
 }
 
 // ── EMAIL FUNCTIONS ──
