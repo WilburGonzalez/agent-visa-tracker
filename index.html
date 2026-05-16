@@ -74,7 +74,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--navy)}
         <label class="lbl">AGENT</label>
         <select id="f_agent" onchange="agentChanged(this.value)">
           <option value="">Select agent</option>
-          <option>Tyler</option><option>Seala</option><option>Kate</option>
+          <option>Tyler</option><option>Seala</option><option>Kate</option><option>Wilbur</option>
         </select>
       </div>
       <div>
@@ -200,6 +200,7 @@ const AGENT_DEFAULTS={
   "Seala":{board:"LA Men",gender:"male",email:"seala@twomanagement.com"},
   "Kate":{board:"New York Men",gender:"male",email:"kate@twomanagement.com"},
   "Tyler":{board:"LA Women",gender:"female",email:"tyler@twomanagement.com"},
+  "Wilbur":{board:"",gender:"",email:"wilbur@twomanagement.com"},
 };
 
 let cases=[];
@@ -636,7 +637,7 @@ function renderDetail(){
     const map={"agent":"Agent","board":"Board","filingType":"Filing Type","email":"Email","targetDate":"Target Date","motherAgency":"Mother Agency","maAgent":"MA Agent Name","maEmail":"MA Email","notes":"Notes"};
     return map[f]||f;
   }
-  addSelect("AGENT",c.agent,"agent",[{v:"",t:"Select"},{v:"Tyler",t:"Tyler"},{v:"Seala",t:"Seala"},{v:"Kate",t:"Kate"}]);
+  addSelect("AGENT",c.agent,"agent",[{v:"",t:"Select"},{v:"Tyler",t:"Tyler"},{v:"Seala",t:"Seala"},{v:"Kate",t:"Kate"},{v:"Wilbur",t:"Wilbur"}]);
   addSelect("BOARD",c.board,"board",[{v:"",t:"Select"},{v:"LA Men",t:"LA Men"},{v:"LA Women",t:"LA Women"},{v:"New York Men",t:"New York Men"}]);
   addSelect("APPLICATION TYPE",c.filingType,"filingType",[{v:"Standard",t:"Standard — $3,080"},{v:"Premium",t:"Premium — $6,045"}]);
 
